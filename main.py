@@ -12,6 +12,10 @@ from oauth2client.service_account import ServiceAccountCredentials
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 SHEET_NAME = os.environ.get('SHEET_NAME')
 GOOGLE_CREDS_JSON = os.environ.get('GOOGLE_CREDS_JSON')
+if not GOOGLE_CREDS_JSON:
+    print("⚠️ GOOGLE_CREDS_JSON este goala!")
+else:
+    print("✅ GOOGLE_CREDS_JSON a fost citita corect.")
 
 # 🗂️ Setări Google Sheets
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
