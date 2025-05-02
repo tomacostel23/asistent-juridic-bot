@@ -12,7 +12,9 @@ creds_dict = {
     "type": os.environ.get("GOOGLE_TYPE"),
     "project_id": os.environ.get("GOOGLE_PROJECT_ID"),
     "private_key_id": os.environ.get("GOOGLE_PRIVATE_KEY_ID"),
-    "private_key": os.environ.get("GOOGLE_PRIVATE_KEY").replace('\\n', '\n'),
+    "private_key": os.environ.get("GOOGLE_PRIVATE_KEY")
+        .replace('\\n', '\n')
+        .replace('\\', ''),
     "client_email": os.environ.get("GOOGLE_CLIENT_EMAIL"),
     "client_id": os.environ.get("GOOGLE_CLIENT_ID"),
     "auth_uri": os.environ.get("GOOGLE_AUTH_URI"),
@@ -26,10 +28,11 @@ creds_dict = {
 print("\nDEBUG: RAW PRIVATE_KEY (from ENV):")
 print(os.environ.get("GOOGLE_PRIVATE_KEY"))
 
-print("\nDEBUG: PROCESSED PRIVATE_KEY (after replace):")
+print("\nDEBUG: PROCESSED PRIVATE_KEY (after replace & clean):")
 print(creds_dict["private_key"])
 
 # Inițializăm gspread
+gc = None
 try:
     gc = gspread.service_account_from_dict(creds_dict)
     logging.info("✅ Conectat la Google Sheets!")
@@ -39,6 +42,10 @@ except Exception as e:
 # Funcția comandă /trimite_contract
 async def trimite_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Comanda /trimite_contract a fost primită ✅")
+
+    if gc is None:
+        await update.message.reply_text("❌ Eroare: Bot-ul nu este conectat la Google Sheets.")
+        return
 
     try:
         # Accesăm sheet-ul
