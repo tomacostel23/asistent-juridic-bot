@@ -2,7 +2,14 @@ import logging
 import os
 import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
@@ -33,6 +40,9 @@ logger.info("✅ Conectat la Google Sheets.")
 SPREADSHEET_ID = "1U-i56_v6Hm92Goh7T6lzoZlLfcqaS9UVfb-lWWxwm_w"
 RANGE_NAME = "B:B"  # Coloana cu denumirile contractelor
 
+# Dict pentru stocare temporară a stării per user
+user_data = {}
+
 # Comanda /trimite_contract
 async def trimite_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("📥 Comanda /trimite_contract primită.")
@@ -42,7 +52,6 @@ async def trimite_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
         values = result.get("values", [])
 
         logger.info(f"DEBUG: Am citit {len(values)} rânduri din Sheets.")
-        # Extragem denumirile reale (fără cap de tabel și rânduri goale)
         contracte = [row[0] for row in values if row and row[0].strip()]
         
         if contracte and contracte[0].lower() in ["denumire", "nume contract"]:
@@ -53,9 +62,9 @@ async def trimite_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ Nu am găsit niciun contract disponibil.")
             return
 
-        # Creăm butoanele inline
+        # Creăm butoane inline
         keyboard = [
-            [InlineKeyboardButton(contract, callback_data=contract)]
+            [InlineKeyboardButton(contract, callback_data=f"contract|{contract}")]
             for contract in contracte
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -68,19 +77,87 @@ async def trimite_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"❌ Eroare la citirea contractelor: {e}")
         await update.message.reply_text("❌ A apărut o eroare la citirea contractelor. Încearcă din nou mai târziu.")
 
-# Handler pentru când alegi un contract
-async def handle_contract_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Handler pentru selectarea contractului
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    contract_selectat = query.data
-    logger.info(f"🖱️ Utilizatorul a selectat contractul: {contract_selectat}")
-    await query.edit_message_text(f"✅ Ai selectat contractul:\n\n📄 {contract_selectat}\n\nDorești să continui cu acest contract? (DA/NU)")
+
+    data = query.data
+    user_id = query.from_user.id
+
+    # Când alegi un contract
+    if data.startswith("contract|"):
+        contract_name = data.split("|", 1)[1]
+        user_data[user_id] = {"contract": contract_name}
+
+        logger.info(f"🖱️ Utilizatorul a selectat contractul: {contract_name}")
+
+        # Butoane DA / NU
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ DA", callback_data="confirm|da"),
+                InlineKeyboardButton("❌ NU", callback_data="confirm|nu"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        mesaj = (
+            f"✅ Ai selectat contractul:\n\n📄 {contract_name}\n\n"
+            "Dorești să continui cu acest contract?"
+        )
+        await query.edit_message_text(mesaj, reply_markup=reply_markup)
+
+    # Confirmare DA / NU
+    elif data.startswith("confirm|"):
+        choice = data.split("|", 1)[1]
+        if choice == "nu":
+            await query.edit_message_text("🚫 Selecția a fost anulată.")
+            user_data.pop(user_id, None)
+        elif choice == "da":
+            await query.edit_message_text("📨 Introdu numele persoanei/companiei către care dorești să trimiți contractul.")
+            user_data[user_id]["awaiting_name"] = True
+
+# Handler pentru mesaje text (nume & email)
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    text = update.message.text.strip()
+
+    if user_id not in user_data:
+        return  # Ignorăm dacă nu avem stare
+
+    # Dacă așteptăm numele persoanei/companiei
+    if user_data[user_id].get("awaiting_name"):
+        user_data[user_id]["nume"] = text
+        user_data[user_id].pop("awaiting_name")
+        user_data[user_id]["awaiting_email"] = True
+        await update.message.reply_text(f"✉️ Introdu adresa de email la care să trimit contractul către {text}.")
+
+    # Dacă așteptăm emailul
+    elif user_data[user_id].get("awaiting_email"):
+        user_data[user_id]["email"] = text
+        user_data[user_id].pop("awaiting_email")
+        contract = user_data[user_id].get("contract")
+        nume = user_data[user_id].get("nume")
+        email = user_data[user_id].get("email")
+
+        logger.info(f"📦 Finalizare: Contract: {contract}, Nume: {nume}, Email: {email}")
+        await update.message.reply_text(
+            f"✅ Am înregistrat următoarele informații:\n\n"
+            f"📄 Contract: {contract}\n"
+            f"👤 Către: {nume}\n"
+            f"✉️ Email: {email}\n\n"
+            "🔔 (Aici va urma trimiterea automată a contractului...)"
+        )
+
+        # Resetăm starea pentru user
+        user_data.pop(user_id)
 
 # Start bot
 if __name__ == "__main__":
     logger.info("🚀 Bot-ul rulează...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("trimite_contract", trimite_contract))
-    app.add_handler(CallbackQueryHandler(handle_contract_select))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.run_polling()
 
