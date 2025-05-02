@@ -1,8 +1,8 @@
 import logging
 import os
 import json
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
@@ -53,19 +53,34 @@ async def trimite_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ Nu am găsit niciun contract disponibil.")
             return
 
-        lista_contracte = "\n".join(f"• {contract}" for contract in contracte)
-        mesaj = f"📄 Lista contracte:\nSelectează unul dintre următoarele:\n\n{lista_contracte}"
-        await update.message.reply_text(mesaj)
-        logger.info(f"✅ Am trimis lista cu {len(contracte)} contracte.")
+        # Creăm butoanele inline
+        keyboard = [
+            [InlineKeyboardButton(contract, callback_data=contract)]
+            for contract in contracte
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        mesaj = "📄 Lista contracte:\nSelectează unul dintre următoarele:"
+        await update.message.reply_text(mesaj, reply_markup=reply_markup)
+        logger.info(f"✅ Am trimis lista cu {len(contracte)} contracte (cu butoane).")
 
     except Exception as e:
         logger.error(f"❌ Eroare la citirea contractelor: {e}")
         await update.message.reply_text("❌ A apărut o eroare la citirea contractelor. Încearcă din nou mai târziu.")
+
+# Handler pentru când alegi un contract
+async def handle_contract_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    contract_selectat = query.data
+    logger.info(f"🖱️ Utilizatorul a selectat contractul: {contract_selectat}")
+    await query.edit_message_text(f"✅ Ai selectat contractul:\n\n📄 {contract_selectat}\n\nDorești să continui cu acest contract? (DA/NU)")
 
 # Start bot
 if __name__ == "__main__":
     logger.info("🚀 Bot-ul rulează...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("trimite_contract", trimite_contract))
+    app.add_handler(CallbackQueryHandler(handle_contract_select))
     app.run_polling()
 
