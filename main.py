@@ -1,131 +1,133 @@
 import os
 import logging
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from dotenv import load_dotenv
 import gspread
-from google.oauth2.service_account import Credentials
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ConversationHandler, ContextTypes, filters
+)
 
-# Setăm logging
+# Configurare logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Citim variabilele de mediu
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GOOGLE_PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-GOOGLE_PRIVATE_KEY_ID = os.getenv("GOOGLE_PRIVATE_KEY_ID")
-GOOGLE_PRIVATE_KEY = os.getenv("GOOGLE_PRIVATE_KEY")
-GOOGLE_CLIENT_EMAIL = os.getenv("GOOGLE_CLIENT_EMAIL")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+# Încarcă variabilele de mediu
+load_dotenv()
 
-# Debug pentru a verifica variabilele
-print(f"DEBUG: TELEGRAM_TOKEN = {repr(TELEGRAM_TOKEN)}")
-print(f"DEBUG: GOOGLE_PRIVATE_KEY = {repr(GOOGLE_PRIVATE_KEY)}")
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 
-# Construim dictionarul de credentials
+# Debug - verificăm dacă token-ul și cheia sunt corecte
+logger.info(f"DEBUG: TELEGRAM_TOKEN = {TELEGRAM_TOKEN}")
+
 creds_dict = {
     "type": "service_account",
-    "project_id": GOOGLE_PROJECT_ID,
-    "private_key_id": GOOGLE_PRIVATE_KEY_ID,
-    "private_key": GOOGLE_PRIVATE_KEY,
-    "client_email": GOOGLE_CLIENT_EMAIL,
-    "client_id": GOOGLE_CLIENT_ID,
+    "project_id": os.getenv('GOOGLE_PROJECT_ID'),
+    "private_key_id": os.getenv('GOOGLE_PRIVATE_KEY_ID'),
+    "private_key": os.getenv('GOOGLE_PRIVATE_KEY').replace('\\n', '\n'),
+    "client_email": os.getenv('GOOGLE_CLIENT_EMAIL'),
+    "client_id": os.getenv('GOOGLE_CLIENT_ID'),
     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
     "token_uri": "https://oauth2.googleapis.com/token",
     "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{GOOGLE_CLIENT_EMAIL.replace('@', '%40')}"
+    "client_x509_cert_url": os.getenv('GOOGLE_CLIENT_X509_CERT_URL')
 }
 
-# Procesăm cheia privată pentru a înlocui \\n cu newline-uri reale
+logger.info(f"DEBUG: GOOGLE_PRIVATE_KEY starts with: {creds_dict['private_key'][:30]}...")
+
+# Inițializează Google Sheets
 try:
-    creds_dict["private_key"] = creds_dict["private_key"].encode().decode('unicode_escape')
+    gc = gspread.service_account_from_dict(creds_dict)
+    sh = gc.open('Lista_contracte')
+    worksheet = sh.sheet1
+    logger.info("✅ Conectat la Google Sheets!")
 except Exception as e:
-    logger.error(f"Eroare la procesarea cheii private: {e}")
+    logger.error(f"❌ Eroare la conectarea la Google Sheets: {e}")
+    gc = None  # În caz de eroare, setăm gc ca None
 
-print(f"DEBUG: GOOGLE_PRIVATE_KEY (processed) = {repr(creds_dict['private_key'])}")
+# Stări pentru conversație
+SELECT_CONTRACT, CONFIRMATION = range(2)
 
-# Inițializăm clientul Google Sheets
-gc = None
-try:
-    credentials = Credentials.from_service_account_info(creds_dict)
-    gc = gspread.authorize(credentials)
-except Exception as e:
-    logger.error(f"Eroare la conectarea la Google Sheets: {e}")
-
-# Conversație pentru trimiterea contractelor
-CHOOSING_CONTRACT, CONFIRMING_SEND = range(2)
-
+# Comanda /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Salut! Folosește comanda /trimite_contract pentru a începe.")
+    await update.message.reply_text("Salut! Trimite comanda /trimite_contract pentru a începe.")
 
+# Comanda /trimite_contract
 async def trimite_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not gc:
         await update.message.reply_text("❌ Eroare: nu mă pot conecta la Google Sheets.")
         return ConversationHandler.END
 
     try:
-        sh = gc.open("Lista_contracte")
-        worksheet = sh.sheet1
-        contracts = worksheet.col_values(2)  # Coloana B
-        if not contracts:
-            await update.message.reply_text("Nu am găsit niciun contract.")
+        contracte = worksheet.col_values(2)[1:]  # Ignorăm headerul
+        context.user_data['contracte'] = contracte
+
+        if not contracte:
+            await update.message.reply_text("⚠️ Nu există contracte disponibile.")
             return ConversationHandler.END
 
-        context.user_data["contracts"] = contracts[1:]  # Excludem headerul
-        keyboard = [[contract] for contract in context.user_data["contracts"]]
-        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-
+        # Trimitem lista de contracte
+        lista = "\n".join([f"{i+1}. {nume}" for i, nume in enumerate(contracte)])
         await update.message.reply_text(
-            "📄 Selectează un contract din listă:",
-            reply_markup=reply_markup
+            f"📄 Lista contracte:\n{lista}\n\nScrie numărul contractului pe care îl vrei:"
         )
-        return CHOOSING_CONTRACT
-
+        return SELECT_CONTRACT
     except Exception as e:
         logger.error(f"Eroare la citirea contractelor: {e}")
         await update.message.reply_text("❌ Eroare la citirea contractelor.")
         return ConversationHandler.END
 
-async def contract_ales(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    contract = update.message.text
-    context.user_data["contract_selectat"] = contract
+# Selectarea contractului
+async def select_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if not text.isdigit():
+        await update.message.reply_text("⚠️ Te rog să scrii un număr valid.")
+        return SELECT_CONTRACT
 
+    index = int(text) - 1
+    contracte = context.user_data.get('contracte', [])
+
+    if index < 0 or index >= len(contracte):
+        await update.message.reply_text("⚠️ Număr invalid. Încearcă din nou.")
+        return SELECT_CONTRACT
+
+    context.user_data['selected_contract'] = contracte[index]
+    reply_keyboard = [['Da', 'Nu']]
     await update.message.reply_text(
-        f"Ai selectat contractul:\n\n📄 {contract}\n\nEști sigur că vrei să continui? (da/nu)"
+        f"Ai selectat: *{contracte[index]}*.\nEști sigur?",
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True)
     )
-    return CONFIRMING_SEND
+    return CONFIRMATION
 
-async def confirmare(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    raspuns = update.message.text.lower()
-    contract = context.user_data.get("contract_selectat")
+# Confirmarea finală
+async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raspuns = update.message.text.strip().lower()
+    contract = context.user_data.get('selected_contract')
 
-    if raspuns == "da":
-        await update.message.reply_text(f"✅ Contractul '{contract}' va fi trimis!")
-        # Aici adaugi logica de trimitere efectivă a contractului
+    if raspuns == 'da':
+        await update.message.reply_text(f"✅ Contractul *{contract}* a fost trimis!", parse_mode='Markdown')
     else:
-        await update.message.reply_text("❌ Trimiterea a fost anulată.")
-
+        await update.message.reply_text("❌ Comanda a fost anulată.")
     return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Am anulat operațiunea.")
-    return ConversationHandler.END
-
-if __name__ == "__main__":
+# Funcția main
+if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("trimite_contract", trimite_contract)],
+        entry_points=[CommandHandler('trimite_contract', trimite_contract)],
         states={
-            CHOOSING_CONTRACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, contract_ales)],
-            CONFIRMING_SEND: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirmare)],
+            SELECT_CONTRACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_contract)],
+            CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirmation)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[]
     )
 
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler('start', start))
     app.add_handler(conv_handler)
 
     logger.info("🚀 Bot-ul rulează...")
