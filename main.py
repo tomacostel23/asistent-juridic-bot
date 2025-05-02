@@ -11,7 +11,6 @@ from telegram.ext import (
 )
 from google.oauth2.service_account import Credentials
 import gspread
-import re
 
 # Configurare logging
 logging.basicConfig(
@@ -51,7 +50,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Comanda /trimite_contract
 async def trimite_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Exemplu de listă de contracte
     contracte = [
         "Contract Agentie imobiliara - comision 0.6%",
         "Contract Agentie imobiliara - comision 0.5%",
@@ -82,7 +80,6 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if raspuns == "da":
         await update.message.reply_text(f"✅ Contractul *{selected_contract}* va fi trimis.", parse_mode="Markdown")
-        # Aici poți adăuga logica pentru a trimite efectiv contractul
     else:
         await update.message.reply_text("❌ Am anulat trimiterea contractului.")
 
@@ -96,7 +93,7 @@ if __name__ == "__main__":
         handle_contract_selection
     ))
     app.add_handler(MessageHandler(
-        filters.Regex(r"^(da|nu)$", flags=re.IGNORECASE),
+        filters.Regex(r"(?i)^(da|nu)$"),  # <-- aici e fixul pentru case-insensitive
         handle_confirmation
     ))
 
