@@ -4,22 +4,15 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import gspread
 
-# Setăm logging-ul
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# Logging basic pentru debug
+logging.basicConfig(level=logging.INFO)
 
-# Citim variabilele de mediu
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME")
-
-# Construim creds_dict cu debug detaliat
+# Pregătim credențialele din variabilele de mediu
 creds_dict = {
     "type": os.environ.get("GOOGLE_TYPE"),
     "project_id": os.environ.get("GOOGLE_PROJECT_ID"),
     "private_key_id": os.environ.get("GOOGLE_PRIVATE_KEY_ID"),
-    "private_key": os.environ.get("GOOGLE_PRIVATE_KEY").encode('utf-8').decode('unicode_escape'),
+    "private_key": os.environ.get("GOOGLE_PRIVATE_KEY").replace('\\n', '\n'),
     "client_email": os.environ.get("GOOGLE_CLIENT_EMAIL"),
     "client_id": os.environ.get("GOOGLE_CLIENT_ID"),
     "auth_uri": os.environ.get("GOOGLE_AUTH_URI"),
@@ -29,45 +22,45 @@ creds_dict = {
     "universe_domain": os.environ.get("GOOGLE_UNIVERSE_DOMAIN")
 }
 
+# Debug la cheie ca să vezi cum arată înainte și după replace
 print("\nDEBUG: RAW PRIVATE_KEY (from ENV):")
 print(os.environ.get("GOOGLE_PRIVATE_KEY"))
 
-print("\nDEBUG: PROCESSED PRIVATE_KEY (after decode):")
+print("\nDEBUG: PROCESSED PRIVATE_KEY (after replace):")
 print(creds_dict["private_key"])
 
-# Conectăm la Google Sheets
-gc = gspread.service_account_from_dict(creds_dict)
-sh = gc.open(SHEET_NAME)
-worksheet = sh.sheet1
+# Inițializăm gspread
+try:
+    gc = gspread.service_account_from_dict(creds_dict)
+    logging.info("✅ Conectat la Google Sheets!")
+except Exception as e:
+    logging.error(f"Eroare la conectarea la Google Sheets: {e}")
 
-# Comanda /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Salut! Sunt Asistentul Juridic 🤖. Trimite comanda /trimite_contract ca să începem.")
-
-# Comanda /trimite_contract
+# Funcția comandă /trimite_contract
 async def trimite_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Comanda /trimite_contract a fost primită ✅\nCitesc contractele disponibile...")
+    await update.message.reply_text("Comanda /trimite_contract a fost primită ✅")
 
     try:
-        # Citim toate valorile din coloana B ("Denumire")
-        denumiri = worksheet.col_values(2)  # Coloana 2 = B
-        denumiri = [d for d in denumiri if d.strip() != ""]  # Eliminăm golurile
-
-        if len(denumiri) == 0:
-            await update.message.reply_text("Nu am găsit niciun contract în lista de pe Google Sheet.")
-        else:
-            lista_contracte = "\n".join([f"- {d}" for d in denumiri])
-            await update.message.reply_text(f"📄 Contractele disponibile sunt:\n{lista_contracte}")
+        # Accesăm sheet-ul
+        sh = gc.open("Lista_contracte")
+        worksheet = sh.sheet1  # sau folosește sheet-ul dorit
+        
+        # Citim coloana B (care are titlul 'Denumire')
+        denumiri = worksheet.col_values(2)  # coloana B este index 2
+        denumiri_text = "\n".join(denumiri)
+        
+        await update.message.reply_text(f"📄 Lista contracte:\n{denumiri_text}")
 
     except Exception as e:
         logging.error(f"Eroare la citirea contractelor: {e}")
-        await update.message.reply_text(f"❌ Eroare la citirea contractelor: {e}")
+        await update.message.reply_text("❌ Eroare la citirea contractelor.")
 
-# Setăm aplicația Telegram
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("trimite_contract", trimite_contract))
+# Pornim bot-ul
+if __name__ == "__main__":
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    app = ApplicationBuilder().token(token).build()
 
-print("✅ Botul rulează și așteaptă comenzi...")
-app.run_polling()
+    app.add_handler(CommandHandler("trimite_contract", trimite_contract))
 
+    logging.info("🚀 Bot-ul rulează...")
+    app.run_polling()
