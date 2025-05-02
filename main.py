@@ -1,73 +1,97 @@
 import os
 import logging
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 import gspread
+from dotenv import load_dotenv
 
-# Logging basic pentru debug
-logging.basicConfig(level=logging.INFO)
+# Configurare logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-# Pregătim credențialele din variabilele de mediu
+logger = logging.getLogger(__name__)
+
+# Încărcare variabile de mediu
+load_dotenv()
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GOOGLE_SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME")
+
+# Configurare gspread
 creds_dict = {
     "type": os.environ.get("GOOGLE_TYPE"),
     "project_id": os.environ.get("GOOGLE_PROJECT_ID"),
     "private_key_id": os.environ.get("GOOGLE_PRIVATE_KEY_ID"),
-    "private_key": os.environ.get("GOOGLE_PRIVATE_KEY")
-        .replace('\\n', '\n')
-        .replace('\\', ''),
+    "private_key": os.environ.get("GOOGLE_PRIVATE_KEY").replace("\\n", "\n"),
     "client_email": os.environ.get("GOOGLE_CLIENT_EMAIL"),
     "client_id": os.environ.get("GOOGLE_CLIENT_ID"),
     "auth_uri": os.environ.get("GOOGLE_AUTH_URI"),
     "token_uri": os.environ.get("GOOGLE_TOKEN_URI"),
-    "auth_provider_x509_cert_url": os.environ.get("GOOGLE_AUTH_PROVIDER_CERT"),
-    "client_x509_cert_url": os.environ.get("GOOGLE_CLIENT_CERT_URL"),
-    "universe_domain": os.environ.get("GOOGLE_UNIVERSE_DOMAIN")
+    "auth_provider_x509_cert_url": os.environ.get("GOOGLE_AUTH_PROVIDER_X509_CERT_URL"),
+    "client_x509_cert_url": os.environ.get("GOOGLE_CLIENT_X509_CERT_URL"),
 }
 
-# Debug la cheie ca să vezi cum arată înainte și după replace
-print("\nDEBUG: RAW PRIVATE_KEY (from ENV):")
-print(os.environ.get("GOOGLE_PRIVATE_KEY"))
+gc = gspread.service_account_from_dict(creds_dict)
 
-print("\nDEBUG: PROCESSED PRIVATE_KEY (after replace & clean):")
-print(creds_dict["private_key"])
-
-# Inițializăm gspread
-gc = None
-try:
-    gc = gspread.service_account_from_dict(creds_dict)
-    logging.info("✅ Conectat la Google Sheets!")
-except Exception as e:
-    logging.error(f"Eroare la conectarea la Google Sheets: {e}")
-
-# Funcția comandă /trimite_contract
 async def trimite_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Comanda /trimite_contract a fost primită ✅")
-
-    if gc is None:
-        await update.message.reply_text("❌ Eroare: Bot-ul nu este conectat la Google Sheets.")
-        return
-
     try:
-        # Accesăm sheet-ul
-        sh = gc.open("Lista_contracte")
-        worksheet = sh.sheet1  # sau folosește sheet-ul dorit
-        
-        # Citim coloana B (care are titlul 'Denumire')
-        denumiri = worksheet.col_values(2)  # coloana B este index 2
-        denumiri_text = "\n".join(denumiri)
-        
-        await update.message.reply_text(f"📄 Lista contracte:\n{denumiri_text}")
+        sheet = gc.open(GOOGLE_SHEET_NAME).sheet1
+        contracte = sheet.col_values(2)[1:]  # Col B, ignorăm headerul
+
+        buttons = [
+            [InlineKeyboardButton(text=contract, callback_data=f"select_{contract}")]
+            for contract in contracte
+        ]
+
+        await update.message.reply_text(
+            "📄 Lista contracte:",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
 
     except Exception as e:
-        logging.error(f"Eroare la citirea contractelor: {e}")
+        logger.error(f"Eroare la citirea contractelor: {e}")
         await update.message.reply_text("❌ Eroare la citirea contractelor.")
 
-# Pornim bot-ul
-if __name__ == "__main__":
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    app = ApplicationBuilder().token(token).build()
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    app.add_handler(CommandHandler("trimite_contract", trimite_contract))
+    if query.data.startswith("select_"):
+        contract_name = query.data.replace("select_", "")
 
-    logging.info("🚀 Bot-ul rulează...")
-    app.run_polling()
+        buttons = [
+            [
+                InlineKeyboardButton("✅ Da", callback_data=f"confirm_yes_{contract_name}"),
+                InlineKeyboardButton("❌ Nu", callback_data="confirm_no")
+            ]
+        ]
+
+        await query.message.reply_text(
+            f"Ai selectat: *{contract_name}*\n\nVrei să continui cu acest contract?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+
+    elif query.data.startswith("confirm_yes_"):
+        contract_name = query.data.replace("confirm_yes_", "")
+        await query.message.reply_text(f"✅ Contractul *{contract_name}* a fost confirmat și va fi procesat. 📄", parse_mode="Markdown")
+        # Aici adaugi logica pentru a trimite contractul efectiv.
+
+    elif query.data == "confirm_no":
+        await query.message.reply_text("🔄 Am anulat selecția. Poți alege din nou un contract cu comanda /trimite_contract.")
+
+
+def main():
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    application.add_handler(CommandHandler("trimite_contract", trimite_contract))
+    application.add_handler(CallbackQueryHandler(button_handler))
+
+    logger.info("🚀 Bot-ul rulează...")
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
+
