@@ -19,8 +19,12 @@ creds_dict = {
     "universe_domain": os.environ.get("GOOGLE_UNIVERSE_DOMAIN")
 }
 
-print("🔍 DEBUG: creds_dict =")
-print(creds_dict)
+# 🔍 DEBUG – Vezi exact cum arată cheia privată (crucial)
+print("\nDEBUG: RAW PRIVATE_KEY (from ENV):")
+print(os.environ.get("GOOGLE_PRIVATE_KEY"))
+
+print("\nDEBUG: PROCESSED PRIVATE_KEY (after .replace):")
+print(creds_dict["private_key"])
 
 # 🔗 Conectare Google Sheets
 gc = gspread.service_account_from_dict(creds_dict)
@@ -44,15 +48,15 @@ async def lista_contracte(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Deschidem sheet-ul după ID
         sh = gc.open_by_key(GOOGLE_SHEET_ID)
-        worksheet = sh.sheet1  # presupunem că e primul sheet (poți schimba dacă ai mai multe foi)
+        worksheet = sh.sheet1  # presupunem că e primul sheet
 
-        # Citim toată coloana B (Denumire)
+        # Citim coloana B (Denumire)
         denumiri = worksheet.col_values(2)  # coloana B = 2
 
         if not denumiri:
             await update.message.reply_text("Nu am găsit niciun contract în listă ❗")
         else:
-            # Ignorăm eventual header-ul (dacă primul rând e "Denumire")
+            # Ignorăm header-ul (dacă primul rând e "Denumire")
             if denumiri[0].strip().lower() == 'denumire':
                 denumiri = denumiri[1:]
 
