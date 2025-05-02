@@ -16,17 +16,21 @@ GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 logging.info(f"DEBUG: TELEGRAM_TOKEN = {TELEGRAM_TOKEN}")
 logging.info(f"DEBUG: GOOGLE_CREDS_JSON starts with: {GOOGLE_CREDS_JSON[:50]}")
 
-# Scriem într-un fișier pt. verificare manuală (opțional)
+# Scriem într-un fișier pt. verificare manuală
 with open("debug_creds.json", "w") as f:
     f.write(GOOGLE_CREDS_JSON)
 
-# ✅ Încărcăm direct JSON-ul (fără replace)
 try:
     creds_info = json.loads(GOOGLE_CREDS_JSON)
     logging.info("✅ JSON loaded cu SUCCES direct (fără replace())")
 except json.JSONDecodeError as e:
     logging.error(f"❌ Eroare la JSON direct: {e}")
     raise SystemExit(1)
+
+# 🚨 Doar pentru 'private_key', facem replace!
+if 'private_key' in creds_info:
+    logging.info("🔧 Am găsit 'private_key', fac replace pentru \\n -> newlines")
+    creds_info['private_key'] = creds_info['private_key'].replace('\\n', '\n')
 
 # Conectare la Google Sheets
 try:
@@ -37,7 +41,7 @@ except Exception as e:
     logging.error(f"❌ Eroare la conectarea la Google Sheets: {e}")
     raise SystemExit(1)
 
-# Exemplu de comanda simplă
+# Comanda simplă de test
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Salut! Bot-ul este online și conectat la Google Sheets.")
 
@@ -48,3 +52,4 @@ if TELEGRAM_TOKEN:
     app.run_polling()
 else:
     logging.error("❌ TELEGRAM_TOKEN lipsește!")
+
