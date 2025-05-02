@@ -2,7 +2,7 @@ import os
 import json
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, 
+    ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, ConversationHandler, filters
 )
 import gspread
@@ -12,10 +12,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 SHEET_NAME = os.environ.get('SHEET_NAME')
 GOOGLE_CREDS_JSON = os.environ.get('GOOGLE_CREDS_JSON')
-if not GOOGLE_CREDS_JSON:
-    print("⚠️ GOOGLE_CREDS_JSON este goala!")
-else:
-    print("✅ GOOGLE_CREDS_JSON a fost citita corect.")
 
 # 🗂️ Setări Google Sheets
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -26,6 +22,11 @@ SELECT_CONTRACT, ASK_NAME, ASK_EMAIL = range(3)
 # 📄 Inițializează Google Sheets client
 def init_gsheet():
     creds_dict = json.loads(GOOGLE_CREDS_JSON)
+
+    # ✅ DEBUG: Vezi exact ce JSON a fost decodat
+    print("🔍 DEBUG: creds_dict =")
+    print(creds_dict)
+
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
     client = gspread.authorize(creds)
     sheet = client.open(SHEET_NAME).sheet1
