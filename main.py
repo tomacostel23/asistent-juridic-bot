@@ -1,97 +1,137 @@
 import os
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+    ConversationHandler,
+)
 import gspread
-from dotenv import load_dotenv
 
 # Configurare logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
-
 logger = logging.getLogger(__name__)
 
-# Încărcare variabile de mediu
-load_dotenv()
+# Variabile pentru stările conversației
+SELECT_CONTRACT, CONFIRM_CONTRACT = range(2)
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GOOGLE_SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME")
-
-# Configurare gspread
-creds_dict = {
-    "type": os.environ.get("GOOGLE_TYPE"),
-    "project_id": os.environ.get("GOOGLE_PROJECT_ID"),
-    "private_key_id": os.environ.get("GOOGLE_PRIVATE_KEY_ID"),
-    "private_key": os.environ.get("GOOGLE_PRIVATE_KEY").replace("\\n", "\n"),
-    "client_email": os.environ.get("GOOGLE_CLIENT_EMAIL"),
-    "client_id": os.environ.get("GOOGLE_CLIENT_ID"),
-    "auth_uri": os.environ.get("GOOGLE_AUTH_URI"),
-    "token_uri": os.environ.get("GOOGLE_TOKEN_URI"),
-    "auth_provider_x509_cert_url": os.environ.get("GOOGLE_AUTH_PROVIDER_X509_CERT_URL"),
-    "client_x509_cert_url": os.environ.get("GOOGLE_CLIENT_X509_CERT_URL"),
+# Setări Google Sheets
+SERVICE_ACCOUNT_INFO = {
+    "type": os.getenv("GOOGLE_TYPE"),
+    "project_id": os.getenv("GOOGLE_PROJECT_ID"),
+    "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID"),
+    "private_key": os.getenv("GOOGLE_PRIVATE_KEY").replace("\\n", "\n"),
+    "client_email": os.getenv("GOOGLE_CLIENT_EMAIL"),
+    "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+    "auth_uri": os.getenv("GOOGLE_AUTH_URI"),
+    "token_uri": os.getenv("GOOGLE_TOKEN_URI"),
+    "auth_provider_x509_cert_url": os.getenv("GOOGLE_AUTH_PROVIDER_CERT_URL"),
+    "client_x509_cert_url": os.getenv("GOOGLE_CLIENT_CERT_URL"),
+    "universe_domain": os.getenv("GOOGLE_UNIVERSE_DOMAIN"),
 }
 
-gc = gspread.service_account_from_dict(creds_dict)
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+# Conectare Google Sheets
+try:
+    gc = gspread.service_account_from_dict(SERVICE_ACCOUNT_INFO)
+    sh = gc.open("Lista_contracte")
+    worksheet = sh.sheet1
+except Exception as e:
+    logger.error(f"Eroare la conectarea la Google Sheets: {e}")
+    gc = None
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Salut! Folosește comanda /trimite_contract pentru a începe.")
+
 
 async def trimite_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        sheet = gc.open(GOOGLE_SHEET_NAME).sheet1
-        contracte = sheet.col_values(2)[1:]  # Col B, ignorăm headerul
+    if not gc:
+        await update.message.reply_text("❌ Nu pot accesa Google Sheets momentan.")
+        return ConversationHandler.END
 
-        buttons = [
-            [InlineKeyboardButton(text=contract, callback_data=f"select_{contract}")]
-            for contract in contracte
-        ]
+    try:
+        contracts = worksheet.col_values(2)[1:]  # Coloana B fără header
+        if not contracts:
+            await update.message.reply_text("📄 Nu am găsit niciun contract disponibil.")
+            return ConversationHandler.END
+
+        contract_list = "\n".join(contracts)
+        reply_keyboard = [[contract] for contract in contracts]
 
         await update.message.reply_text(
-            "📄 Lista contracte:",
-            reply_markup=InlineKeyboardMarkup(buttons)
+            f"📄 Lista contracte:\n{contract_list}\n\nAlege un contract din lista de mai jos 👇",
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True),
         )
+        return SELECT_CONTRACT
 
     except Exception as e:
         logger.error(f"Eroare la citirea contractelor: {e}")
         await update.message.reply_text("❌ Eroare la citirea contractelor.")
+        return ConversationHandler.END
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
 
-    if query.data.startswith("select_"):
-        contract_name = query.data.replace("select_", "")
+async def select_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    selected_contract = update.message.text
+    context.user_data["selected_contract"] = selected_contract
 
-        buttons = [
-            [
-                InlineKeyboardButton("✅ Da", callback_data=f"confirm_yes_{contract_name}"),
-                InlineKeyboardButton("❌ Nu", callback_data="confirm_no")
-            ]
-        ]
+    reply_keyboard = [["Da", "Nu"]]
+    await update.message.reply_text(
+        f"✅ Ai selectat:\n<b>{selected_contract}</b>\n\nVrei să continui?",
+        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True),
+        parse_mode="HTML",
+    )
+    return CONFIRM_CONTRACT
 
-        await query.message.reply_text(
-            f"Ai selectat: *{contract_name}*\n\nVrei să continui cu acest contract?",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(buttons)
+
+async def confirm_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    confirmation = update.message.text.lower()
+    selected_contract = context.user_data.get("selected_contract")
+
+    if confirmation == "da":
+        await update.message.reply_text(
+            f"🚀 Contractul <b>{selected_contract}</b> va fi trimis acum.",
+            reply_markup=ReplyKeyboardRemove(),
+            parse_mode="HTML",
+        )
+        # Aici poți adăuga logica de trimitere a contractului (de ex. pe email)
+    else:
+        await update.message.reply_text(
+            "❌ Ai anulat trimiterea contractului.", reply_markup=ReplyKeyboardRemove()
         )
 
-    elif query.data.startswith("confirm_yes_"):
-        contract_name = query.data.replace("confirm_yes_", "")
-        await query.message.reply_text(f"✅ Contractul *{contract_name}* a fost confirmat și va fi procesat. 📄", parse_mode="Markdown")
-        # Aici adaugi logica pentru a trimite contractul efectiv.
-
-    elif query.data == "confirm_no":
-        await query.message.reply_text("🔄 Am anulat selecția. Poți alege din nou un contract cu comanda /trimite_contract.")
+    return ConversationHandler.END
 
 
-def main():
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Anulat. Dacă vrei să reîncepi, folosește comanda /trimite_contract.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    return ConversationHandler.END
 
-    application.add_handler(CommandHandler("trimite_contract", trimite_contract))
-    application.add_handler(CallbackQueryHandler(button_handler))
+
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("trimite_contract", trimite_contract)],
+        states={
+            SELECT_CONTRACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_contract)],
+            CONFIRM_CONTRACT: [MessageHandler(filters.Regex("^(Da|Nu)$"), confirm_contract)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(conv_handler)
 
     logger.info("🚀 Bot-ul rulează...")
-    application.run_polling()
-
-if __name__ == '__main__':
-    main()
+    app.run_polling()
 
