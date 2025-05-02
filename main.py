@@ -1,15 +1,25 @@
 import os
-import json
-import gspread
+import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import gspread
 
-# 🔑 Citim credențialele Google din variabilele de mediu
+# Setăm logging-ul
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+
+# Citim variabilele de mediu
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME")
+
+# Construim creds_dict cu debug detaliat
 creds_dict = {
     "type": os.environ.get("GOOGLE_TYPE"),
     "project_id": os.environ.get("GOOGLE_PROJECT_ID"),
     "private_key_id": os.environ.get("GOOGLE_PRIVATE_KEY_ID"),
-    "private_key": os.environ.get("GOOGLE_PRIVATE_KEY"),
+    "private_key": os.environ.get("GOOGLE_PRIVATE_KEY").encode('utf-8').decode('unicode_escape'),
     "client_email": os.environ.get("GOOGLE_CLIENT_EMAIL"),
     "client_id": os.environ.get("GOOGLE_CLIENT_ID"),
     "auth_uri": os.environ.get("GOOGLE_AUTH_URI"),
@@ -19,60 +29,45 @@ creds_dict = {
     "universe_domain": os.environ.get("GOOGLE_UNIVERSE_DOMAIN")
 }
 
-# 🔍 DEBUG – Vezi exact cum arată cheia privată (crucial)
 print("\nDEBUG: RAW PRIVATE_KEY (from ENV):")
 print(os.environ.get("GOOGLE_PRIVATE_KEY"))
 
-print("\nDEBUG: PROCESSED PRIVATE_KEY (after .replace):")
+print("\nDEBUG: PROCESSED PRIVATE_KEY (after decode):")
 print(creds_dict["private_key"])
 
-# 🔗 Conectare Google Sheets
+# Conectăm la Google Sheets
 gc = gspread.service_account_from_dict(creds_dict)
+sh = gc.open(SHEET_NAME)
+worksheet = sh.sheet1
 
-# 🆔 ID-ul Google Sheet (schimbă-l cu ID-ul real al fișierului tău!)
-GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")  # ex: '1AbCdEfGhIjKlMnOpQrStUvWxYz'
-
-# 🔑 Citim token-ul Telegram din env
-TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-
-# 🤖 Comanda /start
+# Comanda /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Salut! Sunt Asistentul Juridic 🤖")
+    await update.message.reply_text("Salut! Sunt Asistentul Juridic 🤖. Trimite comanda /trimite_contract ca să începem.")
 
-# 🤖 Comanda /trimite_contract
+# Comanda /trimite_contract
 async def trimite_contract(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Comanda /trimite_contract a fost primită ✅")
+    await update.message.reply_text("Comanda /trimite_contract a fost primită ✅\nCitesc contractele disponibile...")
 
-# 🤖 Comanda /lista_contracte
-async def lista_contracte(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        # Deschidem sheet-ul după ID
-        sh = gc.open_by_key(GOOGLE_SHEET_ID)
-        worksheet = sh.sheet1  # presupunem că e primul sheet
+        # Citim toate valorile din coloana B ("Denumire")
+        denumiri = worksheet.col_values(2)  # Coloana 2 = B
+        denumiri = [d for d in denumiri if d.strip() != ""]  # Eliminăm golurile
 
-        # Citim coloana B (Denumire)
-        denumiri = worksheet.col_values(2)  # coloana B = 2
-
-        if not denumiri:
-            await update.message.reply_text("Nu am găsit niciun contract în listă ❗")
+        if len(denumiri) == 0:
+            await update.message.reply_text("Nu am găsit niciun contract în lista de pe Google Sheet.")
         else:
-            # Ignorăm header-ul (dacă primul rând e "Denumire")
-            if denumiri[0].strip().lower() == 'denumire':
-                denumiri = denumiri[1:]
-
-            mesaj = "📄 Lista contractelor:\n" + "\n".join(f"- {den}" for den in denumiri)
-            await update.message.reply_text(mesaj)
+            lista_contracte = "\n".join([f"- {d}" for d in denumiri])
+            await update.message.reply_text(f"📄 Contractele disponibile sunt:\n{lista_contracte}")
 
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Eroare la citirea Google Sheet: {e}")
+        logging.error(f"Eroare la citirea contractelor: {e}")
+        await update.message.reply_text(f"❌ Eroare la citirea contractelor: {e}")
 
-# 🔄 Pornim aplicația
-if __name__ == '__main__':
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+# Setăm aplicația Telegram
+app = ApplicationBuilder().token(BOT_TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("trimite_contract", trimite_contract))
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("trimite_contract", trimite_contract))
-    app.add_handler(CommandHandler("lista_contracte", lista_contracte))
+print("✅ Botul rulează și așteaptă comenzi...")
+app.run_polling()
 
-    print("🚀 Botul rulează...")
-    app.run_polling()
